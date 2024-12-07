@@ -38,14 +38,32 @@ app.post('/v1/chat/completions', async (req, res) => {
       });
     }
 
-    // 确保 messages 数组中的每个 content 都是字符串
-    const formattedMessages = messages.map((msg) => ({
-      role: msg.role || 'user',
-      content: String(msg.content || ''),
-      type: msg.type || 'text'
-    }));
+    // 确保 messages 数组中的每个对象都有必要的字段
+    const formattedMessages = messages.map((msg) => {
+      if (!msg || typeof msg !== 'object') {
+        throw new Error('Invalid message format');
+      }
+      
+      return {
+        role: msg.role || 'user',
+        content: typeof msg.content === 'string' ? msg.content : String(msg.content || ''),
+        type: msg.type || 'text'
+      };
+    });
 
-    console.log('Debug [41]: Received messages:', JSON.stringify(formattedMessages, null, 2)); // 添加调试信息，确保格式正确
+    console.log('Debug [41]: Received messages:', JSON.stringify(formattedMessages, null, 2));
+
+    // 验证消息格式
+    if (!formattedMessages.every(msg => 
+      msg.role && 
+      typeof msg.role === 'string' &&
+      msg.content && 
+      typeof msg.content === 'string' &&
+      msg.type &&
+      typeof msg.type === 'string'
+    )) {
+      throw new Error('Invalid message format after formatting');
+    }
 
     const hexData = await stringToHex(formattedMessages, model);
 
@@ -73,6 +91,10 @@ app.post('/v1/chat/completions', async (req, res) => {
       },
       body: hexData,
     });
+
+    if (!response.ok) {
+      throw new Error(`API request failed with status ${response.status}`);
+    }
 
     if (stream) {
       res.setHeader('Content-Type', 'text/event-stream');
@@ -116,7 +138,6 @@ app.post('/v1/chat/completions', async (req, res) => {
       // 对解析后的字符串进行进一步处理
       text = text.replace(/^.*<\|END_USER\|>/s, '');
       text = text.replace(/^\n[a-zA-Z]?/, '').trim();
-      // console.log(text)
 
       return res.json({
         id: `chatcmpl-${uuidv4()}`,
@@ -144,7 +165,6 @@ app.post('/v1/chat/completions', async (req, res) => {
     console.error('Error details:', {
       message: error.message,
       stack: error.stack,
-      type: error.type,
       name: error.name
     });
     
