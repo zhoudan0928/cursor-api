@@ -40,8 +40,9 @@ app.post('/v1/chat/completions', async (req, res) => {
 
     // 确保 messages 数组中的每个 content 都是字符串
     const formattedMessages = messages.map((msg) => ({
-      ...msg,
-      content: String(msg.content),
+      role: msg.role || 'user',
+      content: String(msg.content || ''),
+      type: msg.type || 'text'
     }));
 
     console.log('Debug [41]: Received messages:', JSON.stringify(formattedMessages, null, 2)); // 添加调试信息，确保格式正确
@@ -140,13 +141,25 @@ app.post('/v1/chat/completions', async (req, res) => {
       });
     }
   } catch (error) {
-    console.error('Error:', error);
+    console.error('Error details:', {
+      message: error.message,
+      stack: error.stack,
+      type: error.type,
+      name: error.name
+    });
+    
     if (!res.headersSent) {
       if (req.body.stream) {
-        res.write(`data: ${JSON.stringify({ error: 'Internal server error' })}\n\n`);
+        res.write(`data: ${JSON.stringify({ 
+          error: 'Internal server error',
+          details: error.message 
+        })}\n\n`);
         return res.end();
       } else {
-        return res.status(500).json({ error: 'Internal server error' });
+        return res.status(500).json({ 
+          error: 'Internal server error',
+          details: error.message
+        });
       }
     }
   }
