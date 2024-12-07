@@ -38,7 +38,15 @@ app.post('/v1/chat/completions', async (req, res) => {
       });
     }
 
-    const hexData = await stringToHex(messages, model);
+    // 确保 messages 数组中的每个 content 都是字符串
+    const formattedMessages = messages.map((msg) => ({
+      ...msg,
+      content: String(msg.content),
+    }));
+
+    console.log('Debug [41]: Received messages:', JSON.stringify(formattedMessages, null, 2)); // 添加调试信息，确保格式正确
+
+    const hexData = await stringToHex(formattedMessages, model);
 
     // 获取checksum，req header中传递优先，环境变量中的等级第二，最后随机生成
     const checksum =
