@@ -9,7 +9,7 @@ app.use(express.urlencoded({ extended: true }));
 
 app.post('/v1/chat/completions', async (req, res) => {
   // o1开头的模型，不支持流式输出
-  if (req.body.model.startsWith('o1-') && req.body.stream) {
+  if (req.body.model?.startsWith('o1-') && req.body.stream) {
     return res.status(400).json({
       error: 'Model not supported stream',
     });
@@ -18,7 +18,23 @@ app.post('/v1/chat/completions', async (req, res) => {
   let currentKeyIndex = 0;
   try {
     const { model, messages, stream = false } = req.body;
+    
+    // 验证必需的请求参数
+    if (!model) {
+      return res.status(400).json({
+        error: 'Model is required'
+      });
+    }
+
     let authToken = req.headers.authorization?.replace('Bearer ', '');
+    
+    // 验证认证token
+    if (!authToken) {
+      return res.status(401).json({
+        error: 'Authentication token is required'
+      });
+    }
+
     // 处理逗号分隔的密钥
     const keys = authToken.split(',').map((key) => key.trim());
     if (keys.length > 0) {
@@ -29,41 +45,39 @@ app.post('/v1/chat/completions', async (req, res) => {
       // 使用当前索引获取密钥
       authToken = keys[currentKeyIndex];
     }
+
     if (authToken && authToken.includes('%3A%3A')) {
       authToken = authToken.split('%3A%3A')[1];
     }
-    if (!messages || !Array.isArray(messages) || messages.length === 0 || !authToken) {
+
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({
-        error: 'Invalid request. Messages should be a non-empty array and authorization is required',
+        error: 'Messages should be a non-empty array'
       });
     }
 
     // 确保 messages 数组中的每个对象都有必要的字段
     const formattedMessages = messages.map((msg) => {
       if (!msg || typeof msg !== 'object') {
-        throw new Error('Invalid message format');
+        throw new Error('Invalid message format: message must be an object');
       }
       
+      if (!msg.role || typeof msg.role !== 'string') {
+        throw new Error('Invalid message format: role is required and must be a string');
+      }
+
+      if (!msg.content || typeof msg.content !== 'string') {
+        throw new Error('Invalid message format: content is required and must be a string');
+      }
+
       return {
-        role: msg.role || 'user',
-        content: typeof msg.content === 'string' ? msg.content : String(msg.content || ''),
+        role: msg.role,
+        content: msg.content,
         type: msg.type || 'text'
       };
     });
 
     console.log('Debug [41]: Received messages:', JSON.stringify(formattedMessages, null, 2));
-
-    // 验证消息格式
-    if (!formattedMessages.every(msg => 
-      msg.role && 
-      typeof msg.role === 'string' &&
-      msg.content && 
-      typeof msg.content === 'string' &&
-      msg.type &&
-      typeof msg.type === 'string'
-    )) {
-      throw new Error('Invalid message format after formatting');
-    }
 
     const hexData = await stringToHex(formattedMessages, model);
 
@@ -93,7 +107,8 @@ app.post('/v1/chat/completions', async (req, res) => {
     });
 
     if (!response.ok) {
-      throw new Error(`API request failed with status ${response.status}`);
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(`API request failed with status ${response.status}: ${JSON.stringify(errorData)}`);
     }
 
     if (stream) {
@@ -105,25 +120,30 @@ app.post('/v1/chat/completions', async (req, res) => {
 
       // 使用封装的函数处理 chunk
       for await (const chunk of response.body) {
-        const text = await chunkToUtf8String(chunk);
+        try {
+          const text = await chunkToUtf8String(chunk);
 
-        if (text.length > 0) {
-          res.write(
-            `data: ${JSON.stringify({
-              id: responseId,
-              object: 'chat.completion.chunk',
-              created: Math.floor(Date.now() / 1000),
-              model,
-              choices: [
-                {
-                  index: 0,
-                  delta: {
-                    content: text,
+          if (text.length > 0) {
+            res.write(
+              `data: ${JSON.stringify({
+                id: responseId,
+                object: 'chat.completion.chunk',
+                created: Math.floor(Date.now() / 1000),
+                model,
+                choices: [
+                  {
+                    index: 0,
+                    delta: {
+                      content: text,
+                    },
                   },
-                },
-              ],
-            })}\n\n`,
-          );
+                ],
+              })}\n\n`,
+            );
+          }
+        } catch (error) {
+          console.error('Error processing chunk:', error);
+          continue;
         }
       }
 
@@ -133,7 +153,12 @@ app.post('/v1/chat/completions', async (req, res) => {
       let text = '';
       // 在非流模式下也使用封装的函数
       for await (const chunk of response.body) {
-        text += await chunkToUtf8String(chunk);
+        try {
+          text += await chunkToUtf8String(chunk);
+        } catch (error) {
+          console.error('Error processing chunk:', error);
+          continue;
+        }
       }
       // 对解析后的字符串进行进一步处理
       text = text.replace(/^.*<\|END_USER\|>/s, '');
@@ -169,17 +194,17 @@ app.post('/v1/chat/completions', async (req, res) => {
     });
     
     if (!res.headersSent) {
+      const statusCode = error.message.includes('Authentication') ? 401 : 500;
+      const errorResponse = {
+        error: statusCode === 401 ? 'Unauthorized' : 'Internal server error',
+        details: error.message
+      };
+
       if (req.body.stream) {
-        res.write(`data: ${JSON.stringify({ 
-          error: 'Internal server error',
-          details: error.message 
-        })}\n\n`);
+        res.write(`data: ${JSON.stringify(errorResponse)}\n\n`);
         return res.end();
       } else {
-        return res.status(500).json({ 
-          error: 'Internal server error',
-          details: error.message
-        });
+        return res.status(statusCode).json(errorResponse);
       }
     }
   }
