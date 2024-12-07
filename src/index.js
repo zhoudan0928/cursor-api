@@ -57,22 +57,45 @@ app.post('/v1/chat/completions', async (req, res) => {
     }
 
     // 确保 messages 数组中的每个对象都有必要的字段
-    const formattedMessages = messages.map((msg) => {
+    const formattedMessages = messages.map((msg, index) => {
       if (!msg || typeof msg !== 'object') {
-        throw new Error('Invalid message format: message must be an object');
+        throw new Error(`Message at index ${index} must be an object`);
       }
       
       if (!msg.role || typeof msg.role !== 'string') {
-        throw new Error('Invalid message format: role is required and must be a string');
+        throw new Error(`Message at index ${index}: role is required and must be a string`);
       }
 
-      if (!msg.content || typeof msg.content !== 'string') {
-        throw new Error('Invalid message format: content is required and must be a string');
+      // 处理content字段
+      let content = '';
+      if (msg.content === undefined || msg.content === null) {
+        if (msg.role === 'system') {
+          // 系统消息需要content
+          throw new Error(`System message at index ${index} requires content`);
+        }
+        // 其他角色可以有空content
+        content = '';
+      } else if (typeof msg.content === 'string') {
+        content = msg.content;
+      } else if (typeof msg.content === 'object') {
+        // 如果content是对象,尝试转换为字符串
+        try {
+          content = JSON.stringify(msg.content);
+        } catch (err) {
+          throw new Error(`Message at index ${index}: failed to stringify content object`);
+        }
+      } else {
+        // 其他类型尝试转换为字符串
+        try {
+          content = String(msg.content);
+        } catch (err) {
+          throw new Error(`Message at index ${index}: failed to convert content to string`);
+        }
       }
 
       return {
         role: msg.role,
-        content: msg.content,
+        content: content,
         type: msg.type || 'text'
       };
     });
@@ -194,9 +217,9 @@ app.post('/v1/chat/completions', async (req, res) => {
     });
     
     if (!res.headersSent) {
-      const statusCode = error.message.includes('Authentication') ? 401 : 500;
+      const statusCode = error.message.includes('Authentication') ? 401 : 400;
       const errorResponse = {
-        error: statusCode === 401 ? 'Unauthorized' : 'Internal server error',
+        error: statusCode === 401 ? 'Unauthorized' : 'Bad Request',
         details: error.message
       };
 
